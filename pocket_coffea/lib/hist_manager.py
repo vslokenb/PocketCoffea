@@ -462,6 +462,10 @@ class HistManager:
             # the data-structure and weight-broadcast caches so histograms on the same
             # collection reuse them while different collections do not collide.
             data_coll = None
+            # Identifies the per-event layout that ndim>1 axes follow, for any axis
+            # source (collection, `events` or `custom`). Used to key the broadcast
+            # and data-structure caches; see where it is assigned below.
+            data_layout_key = None
 
             for ax in histo.axes:
                 # Checkout the collection type
@@ -492,13 +496,12 @@ class HistManager:
                         # General collections
                         if ax.pos == None:
                             data = events[ax.coll][ax.field]
-                            # pos==None on a collection is the only source of ndim>1 data.
                             # All ndim>1 axes of a histogram must come from the SAME
                             # collection: the broadcast/data-structure caches assume a
-                            # single per-event layout keyed by `data_coll`, and two
-                            # collections may have different jagged counts per event (which
-                            # would also break the shared flatten/fill). The data_ndim check
-                            # below does NOT catch this since both collections are ndim==2.
+                            # single per-event layout, and two collections may have
+                            # different jagged counts per event (which would also break
+                            # the shared flatten/fill). The data_ndim check below does
+                            # NOT catch this since both collections are ndim==2.
                             if data_coll is not None and data_coll != ax.coll:
                                 raise Exception(
                                     f"Histogram {name} mixes full-collection (pos=None) axes "
@@ -515,6 +518,19 @@ class HistManager:
                             raise Exception(
                                 f"Invalid position {ax.pos} requested for collection {ax.coll}"
                             )
+
+                    # Identify the source of the per-event layout for any ndim>1 axis,
+                    # not just full collections: `events` and `custom` axes can be jagged
+                    # too and leave `data_coll` unset, which would make every such
+                    # histogram share the cache key `<cat>::coll::None` and reuse a
+                    # broadcast weight built for a different jagged layout. Keying on the
+                    # actual source keeps unrelated layouts apart; histograms that really
+                    # do share a source still share the cache.
+                    if data.ndim > 1 and data_layout_key is None:
+                        if ax.coll in ("events", "custom"):
+                            data_layout_key = f"{ax.coll}.{ax.field}"
+                        else:
+                            data_layout_key = ax.coll
 
                     # Flattening
                     if data_ndim == None:
@@ -578,7 +594,7 @@ class HistManager:
                         # 2D collection histogram: key the broadcast cache by the
                         # collection so histograms sharing it reuse the broadcast (used
                         # only when mask.ndim==1; a 2D mask below is not cached).
-                        weight_cache_cat = f"{category}::coll::{data_coll}"
+                        weight_cache_cat = f"{category}::coll::{data_layout_key}"
                     else:
                         weight_cache_cat = category
                     if data_ndim == 1 and mask.ndim > 1:
@@ -629,7 +645,7 @@ class HistManager:
                                 # ones_like of the masked collection depends only on
                                 # (collection, category, subsample); reuse it across
                                 # histograms sharing the collection.
-                                _ds_key = (data_coll, category, subsample)
+                                _ds_key = (data_layout_key, category, subsample)
                                 data_structure = self._data_structure_cache.get(_ds_key)
                                 if data_structure is None:
                                     data_structure = ak.ones_like(masked_data)
@@ -726,6 +742,10 @@ class HistManager:
                                     )
 
                                 # Then we apply the notnone mask
+                                self._check_weight_length(
+                                    weight_varied, all_axes_isnotnone, name, category,
+                                    subsample, variation, data_ndim, data_layout_key, mask,
+                                )
                                 weight_varied = weight_varied[ak.to_numpy(all_axes_isnotnone)]
                                 # Fill the histogram
                                 try:
@@ -787,6 +807,10 @@ class HistManager:
                                     data_structure,
                                 )
                             # Then we apply the notnone mask
+                            self._check_weight_length(
+                                weight_nom, all_axes_isnotnone, name, category,
+                                subsample, shape_variation, data_ndim, data_layout_key, mask,
+                            )
                             weight_nom = weight_nom[all_axes_isnotnone]
                             # Fill the histogram
                             try:
@@ -816,6 +840,21 @@ class HistManager:
 
         ###################
         # Utilities to handle the Weights cache
+
+    @staticmethod
+    def _check_weight_length(weight, all_axes_isnotnone, name, category, subsample,
+                             variation, data_ndim, data_layout_key, mask):
+        '''Fail with a diagnostic instead of a bare IndexError when the broadcast
+        weight does not line up with the (flattened) data it has to weight.'''
+        if len(weight) != len(all_axes_isnotnone):
+            raise Exception(
+                f"Weight length mismatch filling histogram `{name}`: the weight has "
+                f"{len(weight)} entries but the data has {len(all_axes_isnotnone)}. "
+                f"(category={category}, subsample={subsample}, variation={variation}, "
+                f"data_ndim={data_ndim}, layout={data_layout_key}, mask.ndim={mask.ndim}). "
+                "This usually means the weight was broadcast against a different "
+                "per-event layout than the one the axes were flattened with."
+            )
 
     @weights_cache
     def mask_and_broadcast_weight(self, weight, mask, data_structure):
