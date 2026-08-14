@@ -406,10 +406,13 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
                 mask_on_events = mask
 
             self.output["cutflow"][category].setdefault(self._dataset, {}).setdefault(self._sample, {})[variation] = ak.sum(mask_on_events)
-            if self._isMC:
-                w = self.weights_manager.get_weight(category)
-                self.output["sumw"][category].setdefault(self._dataset, {}).setdefault(self._sample, {})[variation] = ak.sum(w * mask_on_events)
-                self.output["sumw2"][category].setdefault(self._dataset, {}).setdefault(self._sample, {})[variation] = ak.sum((w**2) * mask_on_events)
+            # Data is weighted too: data-driven estimates (e.g. nonprompt) apply
+            # per-event weights to data, so sumw/sumw2 are meaningful there as well.
+            # With no weights configured the WeightsManager returns 1, making
+            # sumw equal to the raw cutflow count.
+            w = self.weights_manager.get_weight(category)
+            self.output["sumw"][category].setdefault(self._dataset, {}).setdefault(self._sample, {})[variation] = ak.sum(w * mask_on_events)
+            self.output["sumw2"][category].setdefault(self._dataset, {}).setdefault(self._sample, {})[variation] = ak.sum((w**2) * mask_on_events)
 
             # If subsamples are defined we also save their metadata
             if self._hasSubsamples:
@@ -417,11 +420,10 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
                     # get the subsample specific weight
                     mask_withsub = mask_on_events & subsam_mask
                     self.output["cutflow"][category].setdefault(self._dataset, {}).setdefault(f"{self._sample}__{subs}", {})[variation] = ak.sum(mask_withsub)
-                    if self._isMC:
-                        w_tot = w * self.weights_manager.get_weight_only_subsample(subsample=f"{self._sample}__{subs}",
-                                                                                   category=category)
-                        self.output["sumw"][category].setdefault(self._dataset, {}).setdefault(f"{self._sample}__{subs}", {})[variation] = ak.sum(w_tot * mask_withsub)
-                        self.output["sumw2"][category].setdefault(self._dataset, {}).setdefault(f"{self._sample}__{subs}", {})[variation] = ak.sum(((w_tot)**2) * mask_withsub)
+                    w_tot = w * self.weights_manager.get_weight_only_subsample(subsample=f"{self._sample}__{subs}",
+                                                                               category=category)
+                    self.output["sumw"][category].setdefault(self._dataset, {}).setdefault(f"{self._sample}__{subs}", {})[variation] = ak.sum(w_tot * mask_withsub)
+                    self.output["sumw2"][category].setdefault(self._dataset, {}).setdefault(f"{self._sample}__{subs}", {})[variation] = ak.sum(((w_tot)**2) * mask_withsub)
 
 
     def define_custom_axes_extra(self):
@@ -451,7 +453,7 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
             self._hasSubsamples,
             self._subsamples[self._sample].keys(),
             self._categories,
-            variations_config=self.cfg.variations_config[self._sample] if self._isMC else None,
+            variations_config=self.cfg.variations_config.get(self._sample),
             processor_params=self.params,
             weights_manager=self.weights_manager,
             calibrators_manager=self.calibrators_manager,
@@ -519,7 +521,7 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
                 self.column_managers[subs] = ColumnsManager(
                     self._columns[name],
                     self._categories,
-                    variations_config=self.cfg.variations_config[self._sample] if self._isMC else None,
+                    variations_config=self.cfg.variations_config.get(self._sample),
                 )
 
     def define_column_accumulators_extra(self):
@@ -627,7 +629,9 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
     def save_processing_metadata(self):
         # Filling the special histograms for processing metadata if they are present
         total_processing_time = self.stop_time - self.start_time # in seconds
-        add_axes = {"variation":"nominal"} if self._isMC else {}
+        # Data histograms now carry a `variation` axis as well (see HistManager),
+        # so the metadata histograms must be filled with it for data too.
+        add_axes = {"variation":"nominal"}
         # nEvents_after_presel is per-variation; use the value captured on the
         # nominal pass so this "nominal"-axis metadata is not the last variation's.
         n_presel = getattr(self, "_nEvents_after_presel_nominal", self.nEvents_after_presel)

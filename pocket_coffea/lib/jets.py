@@ -641,6 +641,19 @@ def jet_correction_corrlib(
                 jets["pt_jer"] = jets.pt * jersmear
                 jets["mass_jer"] = jets.mass * jersmear
             
+            # Store the JER scale factor actually applied, so downstream code can
+            # undo or re-derive the smearing without recomputing it. Guarded against
+            # division by zero for jets with null pt/mass.
+            jets["pt_sf_jer"] = ak.where(
+                jets.pt != 0,
+                jets["pt_jer"] / jets["pt"],
+                0,
+            )
+            jets["mass_sf_jer"] = ak.where(
+                jets.mass != 0,
+                jets["mass_jer"] / jets["mass"],
+                0,
+            )
             # to avoid the sf: jer*jer_up or jer*jer_down, update the jer pt/mass after calculation of the jer up/down
             jets["pt"] = jets["pt_jer"]
             jets["mass"] = jets["mass_jer"]

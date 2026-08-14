@@ -237,10 +237,13 @@ class Configurator:
         # They define the strings available for the variation configuration
         # The full list of variations are defined for each chunk and specialized by era
         # when the calibrator is instantiated.
-        self.available_calibrators_variations = []
+        # Keyed by calibrator name so that the calibrator class itself is
+        # reachable when validating a variation (e.g. to read `isMC_only`),
+        # mirroring the {name: class} structure of `available_weights`.
+        self.available_calibrators_variations = {}
         for calibrator in self.calibrators:
             if calibrator.has_variations:
-                self.available_calibrators_variations.append(calibrator.name)
+                self.available_calibrators_variations[calibrator.name] = calibrator
 
         ## Variations configuration
         # The structure is very similar to the weights one,
@@ -256,8 +259,10 @@ class Configurator:
                     for sub in self.subsamples_map[s] 
                 }if self.has_subsamples[s] else {}
             }
+            # Data samples are included too: they can carry data-driven weights
+            # (e.g. nonprompt/fake-rate weights) and therefore weight variations.
+            # Weights that are MC-only are filtered out per sample below.
             for s in self.samples
-            if self.samples_metadata[s]["isMC"]
         }
         
         # Default both variation types symmetrically: a config may declare only
@@ -275,21 +280,28 @@ class Configurator:
         self.available_weights_variations = {s: ["nominal"] for s in self.samples}
         self.available_shape_variations = {s: [] for s in self.samples}
         for sample in self.samples:
-            # skipping variations for data
-            if not self.samples_metadata[sample]["isMC"]:
-                continue
-            # Weights variations
+            isMC = self.samples_metadata[sample]["isMC"]
+            # Weights variations.
+            # Data keeps the variations of the weights it actually carries: a
+            # weight declared MC-only is never applied to data, so it cannot
+            # contribute a variation either.
             for cat, vars in self.variations_config[sample]["weights"].items():
-                self.available_weights_variations[sample] += vars
+                for var in vars:
+                    if isMC or not self.available_weights[var].isMC_only:
+                        self.available_weights_variations[sample].append(var)
             # Shape variations — full-sample and subsample-specific.
             # The processor passes available_shape_variations to the calibration loop,
             # so subsample-specific shape variations must be included here so their
             # calibration passes are actually executed.
-            for cat, vars in self.variations_config[sample]["shape"].items():
-                self.available_shape_variations[sample] += vars
-            for subsample_cfg in self.variations_config[sample]["by_subsample"].values():
-                for cat, vars in subsample_cfg["shape"].items():
+            # Shape (calibration) variations stay MC-only: an empty list here makes
+            # the CalibratorsManager build every calibrator with do_variations=False
+            # for data, so no calibration variation is produced.
+            if isMC:
+                for cat, vars in self.variations_config[sample]["shape"].items():
                     self.available_shape_variations[sample] += vars
+                for subsample_cfg in self.variations_config[sample]["by_subsample"].values():
+                    for cat, vars in subsample_cfg["shape"].items():
+                        self.available_shape_variations[sample] += vars
             # make them unique
             self.available_weights_variations[sample] = list(
                 set(self.available_weights_variations[sample])
@@ -561,6 +573,10 @@ class Configurator:
                 print("Available variations: ", available_variations)
                 raise Exception(f"Wrong variation configuration: variation {w} not available in the workflow")
             for sample, wsample in self.variations_config.items():
+                if not self.samples_metadata[sample]["isMC"] and available_variations[w].isMC_only:
+                    # MC-only variation requested inclusively: silently skipped for
+                    # data rather than raising, since `common` applies to all samples.
+                    continue
                 if variation_type == "weights" and w not in self.weights_config[sample]["inclusive"]:
                     print(f"Error: variation {w} not available for sample {sample} in inclusive category")
                     raise Exception(f"Wrong variation configuration: variation {w} not available for sample {sample} in inclusive category")
@@ -575,6 +591,8 @@ class Configurator:
                         print(f"Variation {w} not available in the workflow")
                         raise Exception(f"Wrong variation configuration: variation {w} not available in the workflow")
                     for sample, wsample in self.variations_config.items():
+                        if not self.samples_metadata[sample]["isMC"] and available_variations[w].isMC_only:
+                            continue
                         if (variation_type == "weights" and
                             self.weights_config[sample]["is_split_bycat"] and
                             w not in self.weights_config[sample]["bycategory"][cat]):

@@ -39,6 +39,9 @@ class HistConf:
     exclude_categories: List[str] = None
     only_categories: List[str] = None
     no_weights: bool = False  # Do not fill the weights
+    # Optional name of a per-event field in `events` multiplied into the weight
+    # for this histogram only (e.g. a nonprompt/fake-rate transfer factor).
+    extra_weight: str = None
     metadata_hist: bool = False  # Non-event variables, for processing metadata
     hist_obj = None
     collapse_2D_masks = False  # if 2D masks are applied on the events
@@ -202,7 +205,11 @@ class HistManager:
             self.available_shape_variations_bysubsample_bycat = None
             
             
-        if self.isMC:
+        # Data goes through the same path as MC: it may carry data-driven weights
+        # (e.g. nonprompt/fake-rate) whose variations must populate the axis.
+        # The Configurator filters MC-only weights out of a data sample's
+        # variations_config, so only weights data actually has are asked for here.
+        if self.variations_config is not None:
             # Weights variations
             # This is checking only the full samples weights
             for cat, weights in self.variations_config["weights"].items():
@@ -242,8 +249,8 @@ class HistManager:
                             self.available_shape_variations_bysubsample[subsample] += variations
                             self.available_shape_variations_bysubsample_bycat[subsample][cat] += variations
 
-        else:  # DATA
-            # Add a "weight_variation" nominal for data in each category
+        else:  # No variations configured for this sample at all
+            # Add a "weight_variation" nominal in each category
             for cat in self.categories_config.keys():
                 self.available_weights_variations += ["nominal"]
                 self.available_weights_variations_bycat[cat].append("nominal")
@@ -328,12 +335,11 @@ class HistManager:
                     hcfg_sub.only_variations, name="variation", label="Variation", growth=False
                 )
 
-                # Axis in the configuration + custom axes
-                if self.isMC:
-                    all_axes = [cat_ax, var_ax]
-                else:
-                    # no variation axis for data
-                    all_axes = [cat_ax]
+                # Axis in the configuration + custom axes.
+                # Data carries the variation axis too: data-driven weights
+                # (e.g. nonprompt/fake-rate) have their own variations, and for
+                # unweighted data the axis simply holds "nominal" only.
+                all_axes = [cat_ax, var_ax]
                 # the custom axis get included in the hcfg for future use
                 hcfg_sub.axes = custom_axes + hcfg_sub.axes
                 # Then we add those axes to the full list
@@ -653,7 +659,9 @@ class HistManager:
                     # Ok, now we have all the numerical axes with
                     # data that has been masked, flattened
                     # removed the none value --> now we need weights for each variation
-                    if not histo.no_weights and self.isMC:
+                    # Data follows the same weighted path as MC: it has a variation
+                    # axis too, holding "nominal" plus any data-driven weight variations.
+                    if not histo.no_weights:
                         if shape_variation == "nominal":
                             # if we are working on nominal we fill all the weights variations
                             for variation in self.histograms[subsample][name].hist_obj.axes["variation"]:
@@ -704,6 +712,15 @@ class HistManager:
                                         custom_weight[
                                             name
                                         ],  # passing the custom weight to be masked and broadcasted
+                                        mask,
+                                        data_structure,
+                                    )
+                                if histo.extra_weight is not None:
+                                    weight_varied = weight_varied * self.mask_and_broadcast_weight(
+                                        f"{category}::extraW::{histo.extra_weight}",
+                                        subsample,
+                                        variation,
+                                        events[histo.extra_weight],
                                         mask,
                                         data_structure,
                                     )
@@ -760,6 +777,15 @@ class HistManager:
                                     mask,
                                     data_structure,
                                 )
+                            if histo.extra_weight is not None:
+                                weight_nom = weight_nom * self.mask_and_broadcast_weight(
+                                    f"{category}::extraW::{histo.extra_weight}",
+                                    subsample,
+                                    "nominal",
+                                    events[histo.extra_weight],
+                                    mask,
+                                    data_structure,
+                                )
                             # Then we apply the notnone mask
                             weight_nom = weight_nom[all_axes_isnotnone]
                             # Fill the histogram
@@ -774,54 +800,8 @@ class HistManager:
                                 raise Exception(
                                     f"Cannot fill histogram: {name}, {histo} {e}"
                                 )
-                    ##################################################################################
-                    elif not histo.no_weights and not self.isMC:   #DATA
-                        # Broadcast and mask the weight (using the cached value if possible)
-                        weight_data = weights[category]["nominal"]
-                        # Fold in the by-subsample data weight (ones if none configured).
-                        weight_sub = (
-                            weights_sub[subsample][category]["nominal"]
-                            if self.has_subsamples else 1.
-                        )
-                        weight_data = self.mask_and_broadcast_weight(
-                            weight_cache_cat,
-                            subsample,
-                            "nominal",
-                            (weight_data * weight_sub) if self.has_subsamples else weight_data,
-                            mask,
-                            data_structure,
-                        )
-                        if custom_weight != None and name in custom_weight:
-                            weight_data = weight_data * self.mask_and_broadcast_weight(
-                                f"{category}::customW::{name}",
-                                subsample,
-                                "nominal",
-                                custom_weight[
-                                    name
-                                ],  # passing the custom weight to be masked and broadcasted
-                                mask,
-                                data_structure,
-                            )
-
-                        # Then we apply the notnone mask
-                        weight_data = weight_data[ak.to_numpy(all_axes_isnotnone)]
-                        # Fill the histogram
-                        try:
-                            # Data histograms don't have variations but now can be weighted
-                            self.histograms[subsample][name].hist_obj.fill(
-                                cat=category,
-                                weight=weight_data,
-                                **{**fill_categorical, **fill_numeric_masked},
-                            )
-                        except Exception as e:
-                            raise Exception(
-                                f"Cannot fill histogram for Data: {name}, {histo} {e}"
-                            )
-
                     ######################################################
-                    elif (
-                        histo.no_weights and self.isMC
-                    ):  # NO Weights modifier for the histogram
+                    else:  # NO Weights modifier for the histogram
                         try:
                             self.histograms[subsample][name].hist_obj.fill(
                                 cat=category,
@@ -832,22 +812,6 @@ class HistManager:
                             raise Exception(
                                 f"Cannot fill histogram: {name}, {histo} {e}"
                             )
-
-                    elif histo.no_weights and not self.isMC:
-                        # Fill histograms for Data
-                        try:
-                            self.histograms[subsample][name].hist_obj.fill(
-                                cat=category,
-                                **{**fill_categorical, **fill_numeric_masked},
-                            )
-                        except Exception as e:
-                            raise Exception(
-                                f"Cannot fill histogram: {name}, {histo} {e}"
-                            )
-                    else:
-                        raise Exception(
-                            f"Cannot fill histogram: {name}, {histo}, not implemented combination of options"
-                        )
 
 
         ###################

@@ -141,6 +141,9 @@ class Style:
             return {
                 "year" : "years",
                 "cat" : "categories",
+                # Data histograms carry a variation axis too (data-driven weights
+                # such as nonprompt have their own variations).
+                "variation" : "variations",
                 "era" : "eras"
             }
 
@@ -396,7 +399,9 @@ class Shape:
         self.is_data_only = len(self.samples_mc) == 0
         self.rescale_samples()
         if not self.is_data_only:
-            self.replace_missing_variations()
+            self.replace_missing_variations(is_mc=True)
+        if not self.is_mc_only:
+            self.replace_missing_variations(is_mc=False)
         self.load_attributes()
         self.load_syst_manager()
 
@@ -489,9 +494,17 @@ class Shape:
 
         return dense_axes
 
-    def replace_missing_variations(self):
-        '''Replaces the missing categories in the MC histograms with the nominal values.'''
-        d = {s: v for s, v in self.h_dict.items() if s in self.samples_mc}
+    def replace_missing_variations(self, is_mc=True):
+        '''Replaces the missing categories in the histograms with the nominal values.
+
+        Runs separately over the MC and the data samples: data histograms carry a
+        variation axis too (data-driven weights such as nonprompt have their own
+        variations), and two data samples need not share the same set of variations.
+        '''
+        samples = self.samples_mc if is_mc else self.samples_data
+        d = {s: v for s, v in self.h_dict.items() if s in samples}
+        if len(d) == 0:
+            return
         h0 = self.h_dict[list(d.keys())[0]]
         # Define the categorical axes dict with the categorical axis name as key and the list of available categories as value
         categorical_axes_dict = {axis_name : set() for axis_name in [ax.name for ax in h0.axes if type(ax) in [hist.axis.StrCategory, hist.axis.IntCategory]]}
@@ -549,7 +562,13 @@ class Shape:
                     new_hist_view = new_hist.view()
                     warn_msg = f"WARNING: Sample {s} is missing variations in the axis `{axis_name}`. Filling the {axis_name} with nominal values.\nMissing variations: {categories_missing}"
                     warn_flag = False
+                    # `categorical_axes_dict` holds the union across samples, while
+                    # `axis_other` is this sample's own axis: skip the categories this
+                    # sample does not have rather than failing the index lookup.
+                    categories_other_available = {axis_other.value(j) for j in range(len(axis_other))}
                     for category_other in categorical_axes_dict[axis_name_other]:
+                        if category_other not in categories_other_available:
+                            continue
                         index_other = axis_other.index(category_other)
                         for category in categories:
                             index_category = axis_new.index(category)
@@ -592,8 +611,9 @@ class Shape:
                 ax = [ax for ax in h.axes if ax.name == axis_name][0]
                 categories_per_sample = {ax.value(i) for i in range(len(ax))}
                 if categories_per_sample != categories:
-                    if not is_mc:
-                        raise NotImplementedError("The data histograms have different categories. This case is not implemented yet.")
+                    # Data follows the same rule as MC: only the `variation` axis
+                    # may differ across samples, and such differences are padded
+                    # by replace_missing_variations before reaching this point.
                     if len(categorical_axes_dict) != 2:
                         raise NotImplementedError("The number of categorical axes is different from 2. This case is not implemented yet. Only the axes `cat` and `variation` are supported.")
                     if not axis_name == "variation":
@@ -868,6 +888,11 @@ class Shape:
                         )
                     else:
                         slicing_data = {'cat': cat}
+                # Data histograms now carry a variation axis; the data plotted
+                # here is always the nominal one (data weight variations are
+                # handled as systematics, like for MC).
+                if 'variation' in [ax.name for ax in self.categorical_axes_data]:
+                    slicing_data['variation'] = 'nominal'
                 self.h_dict_data = {
                     d: self.h_dict[d][slicing_data] for d in self.samples_data
                 }

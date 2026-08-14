@@ -55,7 +55,10 @@ class ColumnsManager:
             if weights_manager:
                 self.output[category][variation]["weight"] = column_accumulator(
                     ak.to_numpy(weights_manager.get_weight(category, subsample=subsample)[mask], allow_missing=False))
-                if weights_manager._isMC:
+                # Data is included: a data sample carrying data-driven weights
+                # (e.g. nonprompt) has weight variations to export, matching the
+                # variations filled in the histograms.
+                if self.variations_config is not None:
                     available_weights_variations = []
                     for weight in self.variations_config["weights"][category]:
                         # Ask the WeightsManager the available variations
@@ -152,7 +155,10 @@ class ColumnsManager:
             # the exported weight matches the histogram weight for the same subsample.
             if weights_manager: # no present for data
                 out_by_cat["weight"] = weights_manager.get_weight(category, subsample=subsample)[mask]
-                if weights_manager._isMC:
+                # Data is included: a data sample carrying data-driven weights
+                # (e.g. nonprompt) has weight variations to export, matching the
+                # variations filled in the histograms.
+                if self.variations_config is not None:
                     available_weights_variations = []
                     for weight in self.variations_config["weights"][category]:
                         # Ask the WeightsManager the available variations
