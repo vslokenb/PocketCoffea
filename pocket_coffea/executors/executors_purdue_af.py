@@ -20,7 +20,8 @@ class DaskGatewayExecutorFactory(ExecutorFactoryABC):
             "NB_GID",
             "PYTHONPATH",
             "LD_LIBRARY_PATH",
-            "X509_CERT_DIR"
+            "X509_CERT_DIR",
+            "PATH"
         ]
         for var in propagate_env:
             if var in os.environ:
