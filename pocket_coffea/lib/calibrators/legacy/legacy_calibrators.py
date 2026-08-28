@@ -5,6 +5,7 @@ import cachetools
 import copy
 from pocket_coffea.lib.calibrators.legacy.legacy_jet_correction import jet_correction
 from pocket_coffea.lib.calibrators.legacy.roccor_wrapper import RoccoR as RoccoRWrapper
+from pocket_coffea.lib.correction_cache import load_correction_set
 from pocket_coffea.utils.utils import get_random_seed, get_nano_version
 
 class JetsCalibrator(Calibrator):
@@ -451,3 +452,113 @@ class MuonsRochesterCalibrator(Calibrator):
             return {"Muon.pt": self.pt_corr["up"],      "Muon.pt_original": pt_orig}
         if variation == "muon_roccorDown":
             return {"Muon.pt": self.pt_corr["down"],    "Muon.pt_original": pt_orig}
+
+
+class ElectronsScaleSmearingLegacyCalibrator(Calibrator):
+    """
+    Legacy Run-2 UL electron energy-scale uncertainty, from EGM_ScaleUnc.json.
+
+    The UL scale correction is already applied in NanoAOD, so this calibrator
+    leaves the nominal pT untouched and provides only the up/down variations.
+
+    The correction is evaluated as
+
+        evaluate(year, value_type, eta, gain)
+
+    with year in {"2016preVFP", "2016postVFP", "2017", "2018"}, value_type in
+    {"scaleup", "scaledown", "scaleunc"}, `eta` the supercluster eta and `gain`
+    the electron seed gain. The three value types are redundant --
+    scaleup = 1 + scaleunc and scaledown = 1 - scaleunc -- so only "scaleunc"
+    is read here and the two directions are built from it, which guarantees
+    they stay exactly symmetric about the nominal.
+
+        pt_up   = pt * (1 + scaleunc)
+        pt_down = pt * (1 - scaleunc)
+
+    Run 3 uses ElectronsScaleCalibrator (`electron_scale_and_smearing`) instead.
+    """
+
+    name = "electron_scale_smearing_legacy"
+    has_variations = True
+    isMC_only = True   # the scale correction is applied to data; MC carries the uncertainty
+    calibrated_collections = ["Electron.pt", "Electron.pt_original"]
+
+    def __init__(self, params, metadata, do_variations=True, **kwargs):
+        super().__init__(params, metadata, do_variations, **kwargs)
+        self._year = metadata["year"]
+        self.isMC = metadata["isMC"]
+        self.ss_params = self.params.lepton_scale_factors.electron_sf.scale_unc_legacy
+
+        if not self.ss_params.apply.get(self._year, False):
+            self.enabled = False
+            self._variations = []
+            self.calibrated_collections = []
+            return
+
+        self.enabled = True
+        cfg = self.ss_params.correctionlib_config[self._year]
+        self.cset = load_correction_set(cfg["file"])
+        self.correction_name = cfg["correction_name"]
+        self.year_key = cfg["year_key"]
+        print(f"[ElectronScaleSmearingLegacyCalibrator] Loaded for year {self._year} "
+              f"from {cfg['file']}")
+        self._variations = (
+            ["ele_scale_legacyUp", "ele_scale_legacyDown"]
+            if (self.isMC and do_variations) else []
+        )
+
+    def initialize(self, events):
+        if not self.enabled:
+            return
+
+        ele = events.Electron
+        self.electrons = ak.with_field(ele, ele.pt, "pt_original")
+        counts = ak.num(ele)
+
+        pt = ak.to_numpy(ak.flatten(ele.pt)).astype(np.float64)
+        eta = ak.to_numpy(ak.flatten(ele.eta)).astype(np.float64)
+        # The map is binned in supercluster eta, not in the track eta.
+        eta_sc = ak.to_numpy(ak.flatten(ele.eta + ele.deltaEtaSC)).astype(np.float64)
+        gain = ak.to_numpy(ak.flatten(ele.seedGain)).astype(np.float64)
+
+        if len(pt) == 0:
+            unc = np.zeros(0)
+        else:
+            # Clip to the map's |eta| < 2.5 acceptance: electrons sitting exactly
+            # on the boundary would otherwise put correctionlib out of range.
+            eta_sc = np.clip(eta_sc, -2.49999, 2.49999)
+            unc = self.cset[self.correction_name].evaluate(
+                self.year_key, "scaleunc", eta_sc, gain
+            )
+
+        # The EGM uncertainty is defined on the transverse ENERGY, so vary Et and
+        # convert back to pT rather than scaling pT directly:
+        #     E  = pT * cosh(eta)          (the electron mass is negligible here)
+        #     Et = E / cosh(etaSC)         <- what the uncertainty applies to
+        #     Et -> Et * (1 +/- scaleunc)  ->  pT = Et * cosh(etaSC) / cosh(eta)
+        # eta and etaSC are unchanged by the variation, so the cosh factors cancel
+        # and this reduces to pT * (1 +/- scaleunc); it is written out explicitly
+        # so the quantity being varied is unambiguous.
+        cosh_eta = np.cosh(eta)
+        cosh_eta_sc = np.cosh(eta_sc)
+        et = pt * cosh_eta / cosh_eta_sc
+        to_pt = cosh_eta_sc / cosh_eta
+
+        # Nominal is untouched; the variations are symmetric by construction.
+        self.pt_corr = {
+            "nominal": self.electrons["pt_original"],
+            "up":      ak.unflatten(et * (1.0 + unc) * to_pt, counts),
+            "down":    ak.unflatten(et * (1.0 - unc) * to_pt, counts),
+        }
+
+    def calibrate(self, events, orig_colls, variation, already_applied_calibrators=None):
+        if not self.enabled:
+            return {}
+
+        pt_orig = self.electrons["pt_original"]
+
+        if variation == "ele_scale_legacyUp" and variation in self._variations:
+            return {"Electron.pt": self.pt_corr["up"],      "Electron.pt_original": pt_orig}
+        if variation == "ele_scale_legacyDown" and variation in self._variations:
+            return {"Electron.pt": self.pt_corr["down"],    "Electron.pt_original": pt_orig}
+        return {"Electron.pt": self.pt_corr["nominal"], "Electron.pt_original": pt_orig}
