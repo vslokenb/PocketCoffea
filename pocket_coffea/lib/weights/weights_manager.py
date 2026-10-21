@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import inspect
+import os
 import awkward as ak
 import numpy as np
 import copy
@@ -154,6 +155,33 @@ class WeightsManager:
                 out = self._weightsObj[w].compute(
                     events, size, shape_variation
                 )
+                # POCKET_WEIGHT_DEBUG=1 dumps every weight's NOMINAL value per
+                # shape variation. A weight whose mean differs between "nominal"
+                # and a shape variation is applying something different on the
+                # variation pass, which shows up as a flat normalisation shift in
+                # every systematic's ratio panel.
+                if os.environ.get("POCKET_WEIGHT_DEBUG"):
+                    try:
+                        _v = np.asarray(ak.to_numpy(out.nominal)
+                                        if hasattr(out.nominal, "layout")
+                                        else out.nominal, dtype=float)
+                        print(f"[wdbg] {shape_variation:<26} {out.name:<26} "
+                              f"mean={_v.mean():.8f} sum={_v.sum():.4f} n={_v.size}",
+                              flush=True)
+                        if out.name == "genWeight":
+                            # genWeight is a bare read of events.genWeight, so any
+                            # difference between passes means the field itself was
+                            # mutated. Dump the distribution to see how.
+                            _u = np.unique(_v)
+                            print(f"[wdbg-gw] {shape_variation:<26} "
+                                  f"std={_v.std():.6f} min={_v.min():.6f} "
+                                  f"max={_v.max():.6f} nuniq={_u.size} "
+                                  f"neg={(_v < 0).sum()} zero={(_v == 0).sum()} "
+                                  f"first5={np.array2string(_v[:5], precision=6)}",
+                                  flush=True)
+                    except Exception as _e:  # never let debug break the run
+                        print(f"[wdbg] {shape_variation:<26} {out.name:<26} <{_e}>",
+                              flush=True)
                 # the output is a WeightData or WeightDataMultiVariation object
                 _weightsCache[w] = out
             else:

@@ -254,21 +254,25 @@ lepton_scale_factors:
         '2023_postBPix': False
         '2024':         False
         '2025':         False
+      # `file` is a plain path: EGM_ScaleUnc.json.gz lives in jsonpog-integration,
+      # not in the CAT metadata tree that the ${cvmfs:...} resolver builds, so
+      # point these at a local copy (or a /cvmfs/cms.cern.ch/rsync/... path).
+      # The 2016/2017 entries below are placeholders -- only 2018 is filled in.
       correctionlib_config:
         '2016_PreVFP':
-          file: ${cvmfs:Run2-2016preVFP-UL-NanoAODv9,EGM,EGM_ScaleUnc.json.gz}
+          file: ???
           correction_name: "UL-EGM_ScaleUnc"
           year_key: "2016preVFP"
         '2016_PostVFP':
-          file: ${cvmfs:Run2-2016postVFP-UL-NanoAODv9,EGM,EGM_ScaleUnc.json.gz}
+          file: ???
           correction_name: "UL-EGM_ScaleUnc"
           year_key: "2016postVFP"
         '2017':
-          file: ${cvmfs:Run2-2017-UL-NanoAODv9,EGM,EGM_ScaleUnc.json.gz}
+          file: ???
           correction_name: "UL-EGM_ScaleUnc"
           year_key: "2017"
         '2018':
-          file: ${cvmfs:Run2-2018-UL-NanoAODv9,EGM,EGM_ScaleUnc.json.gz}
+          file: /work/users/vsloken-fnal/semilep_vbs_base/Pocket/temporary_workspace/EGM_ScaleUnc_2018.json.gz
           correction_name: "UL-EGM_ScaleUnc"
           year_key: "2018"
     # The trigger SF configuration is expected to have this structure
