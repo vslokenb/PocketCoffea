@@ -3,9 +3,9 @@ import numpy as np
 import awkward as ak
 import cachetools
 import copy
+from pocket_coffea.lib.correction_cache import load_correction_set
 from pocket_coffea.lib.calibrators.legacy.legacy_jet_correction import jet_correction
 from pocket_coffea.lib.calibrators.legacy.roccor_wrapper import RoccoR as RoccoRWrapper
-from pocket_coffea.lib.correction_cache import load_correction_set
 from pocket_coffea.utils.utils import get_random_seed, get_nano_version
 
 class JetsCalibrator(Calibrator):
