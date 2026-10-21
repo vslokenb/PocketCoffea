@@ -131,6 +131,7 @@ respectively).
 |Brown CCV Oscar | dask | dask@oscar |
 |Maryland rubin cluster | dask, condor | dask@rubin condor@rubin |
 |Fermilab LPC | dask, condor | dask@lpc, condor@lpc |
+|Generic Kubernetes cluster | dask, k8s jobs | dask@kubernetes, k8sjobs@kubernetes |
 
 ---------------------------------------
 
@@ -313,6 +314,7 @@ scheduling. Currently available:
 | `condor@lxplus` | CERN HTCondor    |
 | `condor@rubin`  | Maryland HTCondor |
 | `condor@lpc`    | Fermilab LPC     |
+| `k8sjobs@kubernetes` | Generic Kubernetes cluster (see the Kubernetes section below) |
 
 This mode is best when:
 
@@ -729,6 +731,89 @@ will be computed from the events that were actually processed, so its
 cross-section normalisation will be slightly off by the contribution of the
 dropped file. Only use this when that residual mismatch is acceptable.
 :::
+
+### Kubernetes executors
+
+PocketCoffea can run on any Kubernetes cluster reachable from the submit host, in both
+of the flavours described above:
+
+| Executor string | Mode |
+|-----------------|------|
+| `dask@kubernetes` | Dask cluster on Kubernetes via the [dask-kubernetes operator](https://kubernetes.dask.org/en/latest/operator.html) |
+| `k8sjobs@kubernetes` | Manual-job executor submitting one `batch/v1` Job per chunk-group |
+
+Both modes need a `worker-image` run option pointing to a **registry** image (pods pull
+it from the registry — a `/cvmfs/unpacked.cern.ch/...` apptainer path does not work
+here). The default is the PocketCoffea CI image
+`gitlab-registry.cern.ch/cms-analysis/general/pocketcoffea:lxplus-el9-stable`; use your
+own analysis image if the processor needs extra packages.
+
+#### `dask@kubernetes`
+
+Requires the `dask-kubernetes` client (`pip install pocket_coffea[kubernetes]`) and the
+Dask operator CRDs installed in the cluster (usually by the cluster admins). The
+factory creates a `KubeCluster` named by the `cluster-name` run option in `namespace`
+(defaults to the kubeconfig namespace), scales it to `scaleout` workers with
+`cores-per-worker`/`mem-per-worker` resources, and streams the processing through it
+like the other dask executors. With `adaptive: true` the cluster scales between 1 and
+`scaleout` workers. If a grid proxy is needed by the workers, its path (see
+`voms-proxy`) must be readable inside the pods, e.g. on a shared mount.
+
+```bash
+pocket-coffea run --cfg analysis_config.py -o output --executor dask@kubernetes
+```
+
+#### `k8sjobs@kubernetes` (manual jobs)
+
+The Kubernetes analog of `condor@lxplus`/`condor@lpc`: the fileset is split exactly as
+described in the manual-job section above (`--scaleout`, scalar or per-sample
+`max-events-per-job`, per-sample `chunksize`), one pickled configurator is written per
+job, and the whole submission becomes a single **Indexed Job** (`jobs_all.yaml`,
+`completions = N`, `parallelism = scaleout`) where the pod completion index plays the
+role of HTCondor's `$(ProcId)`. Per-job manifests `job_{i}.yaml` are also written for
+individual resubmission. Submission uses `kubectl apply`, so only `kubectl` (with a
+valid kubeconfig) is needed on the submit host — no python kubernetes client.
+
+**Shared-storage contract**: the jobs dir, output dir and voms-proxy copy are accessed
+by the pods through the *same absolute paths* as on the submit host. Either your
+facility auto-mounts the shared filesystem in pods, or set `pvc-name` +
+`pvc-mount-path` to mount the PersistentVolumeClaim that holds those directories at
+the right place. Outputs under `/eos/...` are pushed with `xrdcp` instead when
+`eos-prefix` is set (as at LPC).
+
+```bash
+pocket-coffea run --cfg analysis_config.py -o output --executor k8sjobs@kubernetes \
+    -ro my_run_options.yaml
+```
+
+with for example:
+
+```yaml
+# my_run_options.yaml
+scaleout: 50                   # total jobs (or use max-events-per-job)
+cores-per-worker: 1
+mem-per-worker: 4GiB
+worker-image: gitlab-registry.cern.ch/cms-analysis/general/pocketcoffea:lxplus-el9-stable
+namespace: my-analysis
+pvc-name: my-shared-volume
+pvc-mount-path: /work
+job-deadline: 43200            # 12h wall-time cap per job (condor-queue analog)
+dry-run: false                 # true: write manifests + job.sh without submitting
+```
+
+Failures are isolated per index (`backoffLimitPerIndex`, which requires **Kubernetes
+>= 1.29**): one failing chunk does not abort the other running pods. Job state is
+tracked with the same `job_{i}.idle/.running/.done/.failed` flag files as the condor
+executors (written by the pods through the shared mount), and the pods also mirror
+their stdout/stderr to `{jobs_dir}/logs/job_<timestamp>.<i>.{out,err}` (condor-style
+naming, so the shared log-scanning machinery applies), so `--recreate-jobs auto|<ids>`
+works the same way: failed/stuck jobs are individually resubmitted (the finished Job
+object is deleted and `job_{i}.yaml` re-applied), inputs that failed with XRootD
+errors / corrupt data are rewritten to another site before resubmission, and
+`--blocklist-sites` / `--use-redirector` are honoured like at lxplus
+(`--recreate-queue` is HTCondor-specific and ignored; use `job-deadline` instead).
+`kubectl logs job/<name>` remains available for live debugging, and finished Jobs can
+be cleaned up automatically with `ttl-seconds-after-finished`.
 
 ### Customize the executor software environment
 The software environment where the executor runs the analysis is defined by the python environment where the analysis is

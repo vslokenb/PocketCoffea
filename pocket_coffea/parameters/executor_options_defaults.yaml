@@ -238,3 +238,45 @@ dask@oscar:
   skip-bad-files: true
   retries: 3
   queue: "batch"
+
+dask@kubernetes:
+  scaleout: 10
+  cores-per-worker: 1
+  mem-per-worker: "2GiB"
+  # Registry image (NOT a cvmfs-unpacked path): pods pull it from the registry.
+  worker-image: gitlab-registry.cern.ch/cms-analysis/general/pocketcoffea:lxplus-el9-stable
+  adaptive: false
+  # Kubernetes namespace to create the Dask cluster in (null = kubeconfig default).
+  namespace: null
+  cluster-name: pocket-coffea-dask
+
+k8sjobs@kubernetes:
+  scaleout: 10
+  cores-per-worker: 1
+  mem-per-worker: "2GiB"
+  # Registry image (NOT a cvmfs-unpacked path): pods pull it from the registry.
+  worker-image: gitlab-registry.cern.ch/cms-analysis/general/pocketcoffea:lxplus-el9-stable
+  custom-setup-commands: null
+  split-by-category: false
+  # Namespace / kubectl context the Jobs are submitted to (null = kubeconfig defaults).
+  namespace: null
+  kubernetes-context: null
+  # PVC holding the jobs dir and output dir. It must be mounted at `pvc-mount-path`
+  # so the pods see those dirs at the SAME absolute paths as the submit host.
+  # Leave both null if your facility auto-mounts the shared filesystem in pods.
+  pvc-name: null
+  pvc-mount-path: null
+  service-account: null
+  node-selector: null
+  # Per-index pod-failure retries (backoffLimitPerIndex, needs k8s >= 1.29);
+  # resubmission is normally done with `--recreate-jobs auto` instead
+  # (mirrors the condor executors).
+  backoff-limit: 0
+  # Auto-cleanup of finished Jobs (seconds); null keeps them until deleted.
+  ttl-seconds-after-finished: null
+  # Hard wall-time per job in seconds (the k8s analog of a condor queue); null = unlimited.
+  job-deadline: null
+  # Cap on concurrently running pods (defaults to scaleout).
+  parallelism: null
+  # Set to e.g. root://cmseos.fnal.gov//eos/uscms to push /eos/... outputs via xrdcp.
+  eos-prefix: null

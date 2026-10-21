@@ -76,6 +76,14 @@ pocket\_coffea.executors.executors\_infn\_af module
    :show-inheritance:
    :undoc-members:
 
+pocket\_coffea.executors.executors\_kubernetes module
+-----------------------------------------------------
+
+.. automodule:: pocket_coffea.executors.executors_kubernetes
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 pocket\_coffea.executors.executors\_lxplus module
 -------------------------------------------------
 
