@@ -249,6 +249,10 @@ dask@kubernetes:
   # Kubernetes namespace to create the Dask cluster in (null = kubeconfig default).
   namespace: null
   cluster-name: pocket-coffea-dask
+  # Worker-visible directory (shared mount) the voms proxy is staged to; the
+  # pods cannot read the submit host's /tmp or $HOME. Null: use the proxy path
+  # as-is (voms-proxy run option or $HOME copy).
+  proxy-dir: null
 
 k8sjobs@kubernetes:
   scaleout: 10

@@ -756,8 +756,10 @@ factory creates a `KubeCluster` named by the `cluster-name` run option in `names
 (defaults to the kubeconfig namespace), scales it to `scaleout` workers with
 `cores-per-worker`/`mem-per-worker` resources, and streams the processing through it
 like the other dask executors. With `adaptive: true` the cluster scales between 1 and
-`scaleout` workers. If a grid proxy is needed by the workers, its path (see
-`voms-proxy`) must be readable inside the pods, e.g. on a shared mount.
+`scaleout` workers. If a grid proxy is needed by the workers, its path must be
+readable inside the pods: set `proxy-dir` to a shared-mount directory and the proxy
+is staged there automatically (pods cannot read the submit host's `/tmp` or `$HOME`),
+or point `voms-proxy` at an already-visible path.
 
 ```bash
 pocket-coffea run --cfg analysis_config.py -o output --executor dask@kubernetes

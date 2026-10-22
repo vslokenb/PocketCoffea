@@ -28,6 +28,7 @@ image, since pods cannot see the submit host's python environment.
 '''
 import os
 import re
+import shutil
 import subprocess
 from copy import deepcopy
 from coffea import processor as coffea_processor
@@ -75,6 +76,29 @@ def _sanitize_k8s_name(name):
     return name[:63].rstrip("-") or "pocket-coffea"
 
 
+def _kubectl_prefix(run_options):
+    '''kubectl command prefix honoring the namespace/context run options.'''
+    cmd = "kubectl"
+    context = run_options.get("kubernetes-context", None)
+    if context:
+        cmd += f" --context {context}"
+    namespace = run_options.get("namespace", None)
+    if namespace:
+        cmd += f" -n {namespace}"
+    return cmd
+
+
+def _stage_proxy(x509_path, proxy_dir):
+    '''Copy the voms proxy to a worker-visible directory (shared mount) and
+    return the staged path. Workers cannot read the submit host's /tmp or
+    $HOME, so the proxy must live on a path the pods actually mount.'''
+    os.makedirs(proxy_dir, exist_ok=True)
+    staged = os.path.join(os.path.abspath(proxy_dir), os.path.basename(x509_path))
+    if os.path.abspath(x509_path) != staged:
+        shutil.copy2(x509_path, staged)
+    return staged
+
+
 # Kubernetes resource quantity: plain number or number + one of these suffixes.
 _K8S_QUANTITY_RE = re.compile(r"^\d+(\.\d+)?(Ki|Mi|Gi|Ti|Pi|Ei|m|k|M|G|T|P|E)?$")
 
@@ -109,6 +133,18 @@ class DaskExecutorFactory(ExecutorFactoryABC):
     def __init__(self, run_options, outputdir, **kwargs):
         self.outputdir = outputdir
         super().__init__(run_options, **kwargs)
+
+    def setup_proxyfile(self):
+        super().setup_proxyfile()
+        if self.run_options.get('ignore-grid-certificate', False):
+            return
+        # Workers cannot read the submit host's /tmp or $HOME: stage the proxy
+        # on a shared mount the pods see (a stale/invisible proxy fails with
+        # "Auth failed: No protocols left to try", not an obvious message).
+        proxy_dir = self.run_options.get("proxy-dir", None)
+        if proxy_dir:
+            self.x509_path = _stage_proxy(self.x509_path, proxy_dir)
+            print(f">> voms proxy staged to worker-visible path {self.x509_path}")
 
     def setup(self):
         self.setup_proxyfile()
@@ -216,14 +252,8 @@ class ExecutorFactoryKubernetesJobs(ExecutorFactoryManualABC):
         pass
 
     def _kubectl(self, verb_and_args, raise_on_error=False):
-        '''Build and run a kubectl command honoring the namespace/context run options.'''
-        cmd = "kubectl"
-        context = self.run_options.get("kubernetes-context", None)
-        if context:
-            cmd += f" --context {context}"
-        namespace = self.run_options.get("namespace", None)
-        if namespace:
-            cmd += f" -n {namespace}"
+        '''Run a kubectl command honoring the namespace/context run options.'''
+        cmd = _kubectl_prefix(self.run_options)
         rc = _run_cmd(f"{cmd} {verb_and_args}")
         if rc != 0 and raise_on_error:
             raise Exception(f"kubectl command failed with exit code {rc}: {cmd} {verb_and_args}")
