@@ -253,6 +253,9 @@ dask@kubernetes:
   # pods cannot read the submit host's /tmp or $HOME. Null: use the proxy path
   # as-is (voms-proxy run option or $HOME copy).
   proxy-dir: null
+  # NVIDIA GPUs per worker pod (nvidia.com/gpu limit). Only useful when the
+  # workload uses them (e.g. xgboost inference with device="cuda").
+  gpus-per-worker: null
 
 k8sjobs@kubernetes:
   scaleout: 10
@@ -278,9 +281,15 @@ k8sjobs@kubernetes:
   backoff-limit: 0
   # Auto-cleanup of finished Jobs (seconds); null keeps them until deleted.
   ttl-seconds-after-finished: null
-  # Hard wall-time per job in seconds (the k8s analog of a condor queue); null = unlimited.
+  # activeDeadlineSeconds, in seconds; null = unlimited. NOTE this is
+  # JOB-LEVEL: on the main Indexed Job it caps the WHOLE submission (all
+  # waves of pods); it is a per-chunk-group cap only on the single-job
+  # manifests used for resubmission.
   job-deadline: null
   # Cap on concurrently running pods (defaults to scaleout).
   parallelism: null
+  # NVIDIA GPUs per job pod (nvidia.com/gpu limit). Only useful when the
+  # workload uses them (e.g. xgboost inference with device="cuda").
+  gpus-per-worker: null
   # Set to e.g. root://cmseos.fnal.gov//eos/uscms to push /eos/... outputs via xrdcp.
   eos-prefix: null

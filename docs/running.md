@@ -748,6 +748,11 @@ here). The default is the PocketCoffea CI image
 `gitlab-registry.cern.ch/cms-analysis/general/pocketcoffea:lxplus-el9-stable`; use your
 own analysis image if the processor needs extra packages.
 
+Both modes also accept `gpus-per-worker: N` to request NVIDIA GPUs
+(`nvidia.com/gpu`) for the worker/job pods — useful only when the workload
+actually uses them (e.g. xgboost BDT inference with `device="cuda"`); the
+columnar coffea processing itself runs on CPU.
+
 #### `dask@kubernetes`
 
 Requires the `dask-kubernetes` client (`pip install pocket_coffea[kubernetes]`) and the
@@ -799,8 +804,12 @@ worker-image: gitlab-registry.cern.ch/cms-analysis/general/pocketcoffea:lxplus-e
 namespace: my-analysis
 pvc-name: my-shared-volume
 pvc-mount-path: /work
-job-deadline: 43200            # 12h wall-time cap per job (condor-queue analog)
+job-deadline: null             # activeDeadlineSeconds — Job-level, so on the main
+                               # Indexed Job it caps the WHOLE submission, not each
+                               # chunk-group (per-chunk-group only on resubmissions)
 dry-run: false                 # true: write manifests + job.sh without submitting
+                               # (set it in a yaml — a CLI `--dry-run false` stores
+                               # the truthy string "false" and keeps dry-run ON)
 ```
 
 Failures are isolated per index (`backoffLimitPerIndex`, which requires **Kubernetes
@@ -813,9 +822,10 @@ works the same way: failed/stuck jobs are individually resubmitted (the finished
 object is deleted and `job_{i}.yaml` re-applied), inputs that failed with XRootD
 errors / corrupt data are rewritten to another site before resubmission, and
 `--blocklist-sites` / `--use-redirector` are honoured like at lxplus
-(`--recreate-queue` is HTCondor-specific and ignored; use `job-deadline` instead).
-`kubectl logs job/<name>` remains available for live debugging, and finished Jobs can
-be cleaned up automatically with `ttl-seconds-after-finished`.
+(`--recreate-queue` is HTCondor-specific and ignored). `check-jobs` does **not**
+support this executor (it expects condor `.sub` files and the condor event log):
+monitor with `kubectl get pods` / `kubectl logs` and the flag files instead.
+Finished Jobs can be cleaned up automatically with `ttl-seconds-after-finished`.
 
 ### Customize the executor software environment
 The software environment where the executor runs the analysis is defined by the python environment where the analysis is

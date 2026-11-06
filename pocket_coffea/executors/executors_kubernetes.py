@@ -88,6 +88,25 @@ def _kubectl_prefix(run_options):
     return cmd
 
 
+def _pod_resources(run_options):
+    '''Container resources (requests/limits) from the run options.
+
+    `gpus-per-worker` requests NVIDIA GPUs (`nvidia.com/gpu`); extended
+    resources must be set in limits (kubernetes implies the request). Only
+    useful when the workload actually uses them, e.g. xgboost inference with
+    device="cuda" -- the columnar coffea processing itself stays on CPU.'''
+    cores_per_worker = int(run_options.get("cores-per-worker", 1))
+    memory = _normalize_memory(run_options.get("mem-per-worker", "2GiB"), "2Gi")
+    resources = {
+        "requests": {"cpu": str(cores_per_worker), "memory": memory},
+        "limits": {"memory": memory},
+    }
+    gpus = run_options.get("gpus-per-worker", None)
+    if gpus:
+        resources["limits"]["nvidia.com/gpu"] = str(int(gpus))
+    return resources
+
+
 def _stage_proxy(x509_path, proxy_dir):
     '''Copy the voms proxy to a worker-visible directory (shared mount) and
     return the staged path. Workers cannot read the submit host's /tmp or
@@ -192,10 +211,7 @@ class DaskExecutorFactory(ExecutorFactoryABC):
             "name": _sanitize_k8s_name(self.run_options.get("cluster-name", "pocket-coffea-dask")),
             "image": worker_image,
             "n_workers": scaleout,
-            "resources": {
-                "requests": {"cpu": str(cores_per_worker), "memory": memory},
-                "limits": {"memory": memory},
-            },
+            "resources": _pod_resources(self.run_options),
             "env": env,
         }
         namespace = self.run_options.get("namespace", None)
@@ -244,8 +260,10 @@ class ExecutorFactoryKubernetesJobs(ExecutorFactoryManualABC):
     ``job_{i}.idle/.running/.done/.failed`` flag files as the condor executors,
     and the pods mirror their stdout/stderr to the shared
     ``logs/job_<timestamp>.<i>.{out,err}`` (condor-style naming, the timestamp
-    playing the ClusterId's role of separating attempts) so the shared
-    log-scanning machinery of check-jobs / --recreate-jobs works unchanged.
+    playing the ClusterId's role of separating attempts) so --recreate-jobs'
+    input-failure log scanning works unchanged. check-jobs does NOT support
+    this executor (it expects condor .sub files and the condor event log);
+    monitor with kubectl and the flag files instead.
     '''
 
     def get(self):
@@ -302,17 +320,11 @@ class ExecutorFactoryKubernetesJobs(ExecutorFactoryManualABC):
         '''
         abs_jobdir_path = os.path.abspath(self.jobs_dir)
 
-        cores_per_worker = int(self.run_options.get("cores-per-worker", 1))
-        memory = _normalize_memory(self.run_options.get("mem-per-worker", "2GiB"), "2Gi")
-
         container = {
             "name": "pocket-coffea",
             "image": self.run_options["worker-image"],
             "command": ["bash", f"{abs_jobdir_path}/job.sh"],
-            "resources": {
-                "requests": {"cpu": str(cores_per_worker), "memory": memory},
-                "limits": {"memory": memory},
-            },
+            "resources": _pod_resources(self.run_options),
         }
         if job_index is not None:
             container["env"] = [{"name": "POCKET_JOB_ID", "value": str(job_index)}]
@@ -490,7 +502,7 @@ if [ -z "$JOBID" ]; then
     exit 1
 fi
 
-# Mirror stdout/stderr to the shared logs dir so check-jobs/--recreate-jobs can
+# Mirror stdout/stderr to the shared logs dir so --recreate-jobs can
 # analyse them like the condor logs, while `kubectl logs` keeps working. Condor
 # log naming job_<ClusterId>.<ProcId>.{{out,err}} is kept, with a timestamp as
 # the ClusterId, so the shared log-scanning helpers work unchanged. Guarded:

@@ -43,6 +43,43 @@ The user can customize the process from the confguration file or by redefining w
   
 - [Join](https://mattermost.web.cern.ch/cms-exp/channels/pocketcoffea---qa) the Q&A CMS Mattermost channel for technical questions
 
+## Kubernetes executors — FIRST ITERATION (testing)
+
+**This branch (`kubernetes-executor-test`) carries the first iteration of the new
+Kubernetes executors. It is a test, not yet a supported production path.**
+
+Two new executor strings, following the existing dask/condor site conventions
+(full documentation in `docs/running.md`, section "Kubernetes executors"):
+
+- `dask@kubernetes` — Dask cluster through the dask-kubernetes operator
+  (`pip install pocket_coffea[kubernetes]`; operator CRDs must be installed in
+  the cluster).
+- `k8sjobs@kubernetes` — manual-jobs executor: one Indexed `batch/v1` Job for
+  the whole fileset splitting (pod completion index = condor `$(ProcId)`),
+  per-job manifests for `--recreate-jobs`, `kubectl apply` submission. Needs
+  only `kubectl` on the submit host. Per-index failure isolation requires
+  **Kubernetes >= 1.29**.
+
+Intended use case: running the usual grouped analysis passes
+(`pocket-coffea run --cfg <config> -o <out> --executor k8sjobs@kubernetes -ro <options>.yaml`)
+on a Kubernetes cluster/analysis facility, with the jobs dir, output dir and
+voms proxy on a shared mount visible to the pods at the same absolute paths
+(`pvc-name`/`pvc-mount-path`), and optional GPUs per pod (`gpus-per-worker`).
+
+Initial test cases (what has been exercised so far):
+
+1. Unit tests, no cluster needed: `pytest tests/test_kubernetes_jobs.py
+   tests/test_kubernetes_proxy_staging.py` — manifest structure (Indexed Job,
+   per-index backoff, PVC mounts, namespace/context, GPU limits), `job.sh`
+   generation (`bash -n` checked, per-job chunksizes, flag files),
+   split-by-category, dry-run, failed-submission handling, `--recreate-jobs`
+   resubmission including the XRootD input-rewrite path, proxy staging.
+2. `--executor k8sjobs@kubernetes` with `dry-run: true` — writes
+   `jobs_all.yaml`, `job_{i}.yaml`, `job.sh`, `chunksizes.txt`,
+   `inner_run_options.yaml` for inspection without submitting.
+3. Not yet exercised: real submissions at scale on a cluster — that is the
+   point of this test branch.
+
 ## Testing 
 At the moment this repository is mirrored to the CERN GitLab:  https://gitlab.cern.ch/cms-analysis/general/PocketCoffea.
 

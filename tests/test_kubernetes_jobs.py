@@ -198,6 +198,15 @@ def test_indexed_job_manifest(tmp_path, kubectl_calls):
     assert "volumes" not in manifest["spec"]["template"]["spec"]
 
 
+def test_gpus_per_worker_sets_nvidia_limit(tmp_path, kubectl_calls):
+    factory = _submit(tmp_path, _run_options(**{"gpus-per-worker": 1}))
+    manifest = yaml.safe_load(open(f"{factory.jobs_dir}/jobs_all.yaml"))
+    resources = manifest["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert resources["limits"]["nvidia.com/gpu"] == "1"
+    # extended resources go in limits only (kubernetes implies the request)
+    assert "nvidia.com/gpu" not in resources["requests"]
+
+
 def test_per_job_manifest_has_explicit_job_id(tmp_path, kubectl_calls):
     factory = _submit(tmp_path, _run_options())
     jobs_dir = factory.jobs_dir
