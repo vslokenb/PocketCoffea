@@ -786,7 +786,23 @@ by the pods through the *same absolute paths* as on the submit host. Either your
 facility auto-mounts the shared filesystem in pods, or set `pvc-name` +
 `pvc-mount-path` to mount the PersistentVolumeClaim that holds those directories at
 the right place. Outputs under `/eos/...` are pushed with `xrdcp` instead when
-`eos-prefix` is set (as at LPC).
+`eos-prefix` is set (as at LPC). On a multi-tenant cluster the submit host is
+usually itself a pod/JupyterHub session in the namespace with that PVC mounted.
+
+Additional mounts (e.g. CVMFS repositories, where the cluster exposes them as CSI
+PVCs — as on NRP/Nautilus — or as a node hostPath) go through `extra-volumes`; each
+entry carries a raw kubernetes volume source, so any volume type works:
+
+```yaml
+extra-volumes:
+  - name: cvmfs-cms-griddata
+    mount-path: /cvmfs/cms-griddata.cern.ch
+    read-only: true
+    volume: {persistentVolumeClaim: {claimName: cvmfs-cms-griddata}}
+```
+
+CPU and memory are both requested *and* limited on the pods (multi-tenant clusters
+like NRP/Nautilus require limits at admission).
 
 ```bash
 pocket-coffea run --cfg analysis_config.py -o output --executor k8sjobs@kubernetes \

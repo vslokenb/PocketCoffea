@@ -191,6 +191,8 @@ def test_indexed_job_manifest(tmp_path, kubectl_calls):
     container = manifest["spec"]["template"]["spec"]["containers"][0]
     assert container["image"] == "registry.example.org/pocketcoffea:latest"
     assert container["resources"]["requests"] == {"cpu": "1", "memory": "2Gi"}
+    # cpu is limited too: multi-tenant clusters (NRP) require it at admission
+    assert container["resources"]["limits"] == {"cpu": "1", "memory": "2Gi"}
     assert container["command"][-1].endswith("job.sh")
     assert manifest["spec"]["template"]["spec"]["restartPolicy"] == "Never"
     # no namespace / pvc unless configured
@@ -205,6 +207,43 @@ def test_gpus_per_worker_sets_nvidia_limit(tmp_path, kubectl_calls):
     assert resources["limits"]["nvidia.com/gpu"] == "1"
     # extended resources go in limits only (kubernetes implies the request)
     assert "nvidia.com/gpu" not in resources["requests"]
+
+
+def test_extra_volumes_mounted(tmp_path, kubectl_calls):
+    opts = _run_options(**{
+        "pvc-name": "shared-volume",
+        "pvc-mount-path": "/work",
+        "extra-volumes": [
+            {"name": "cvmfs-cms-griddata",
+             "mount-path": "/cvmfs/cms-griddata.cern.ch",
+             "read-only": True,
+             "volume": {"persistentVolumeClaim": {"claimName": "cvmfs-cms-griddata"}}},
+            {"mount-path": "/cvmfs",
+             "volume": {"hostPath": {"path": "/cvmfs"}}},
+        ],
+    })
+    factory = _submit(tmp_path, opts)
+    manifest = yaml.safe_load(open(f"{factory.jobs_dir}/jobs_all.yaml"))
+    pod = manifest["spec"]["template"]["spec"]
+    vols = {v["name"]: v for v in pod["volumes"]}
+    mounts = {m["name"]: m for m in pod["containers"][0]["volumeMounts"]}
+
+    # data PVC still first, extras appended
+    assert vols["pocket-coffea-data"]["persistentVolumeClaim"]["claimName"] == "shared-volume"
+    assert vols["cvmfs-cms-griddata"]["persistentVolumeClaim"]["claimName"] == "cvmfs-cms-griddata"
+    assert mounts["cvmfs-cms-griddata"] == {"name": "cvmfs-cms-griddata",
+                                            "mountPath": "/cvmfs/cms-griddata.cern.ch",
+                                            "readOnly": True}
+    # unnamed hostPath entry gets a generated name and no readOnly key
+    assert vols["extra-vol-1"]["hostPath"]["path"] == "/cvmfs"
+    assert mounts["extra-vol-1"] == {"name": "extra-vol-1", "mountPath": "/cvmfs"}
+
+
+def test_extra_volumes_entry_validation(tmp_path, kubectl_calls):
+    with pytest.raises(Exception, match="extra-volumes entry"):
+        _submit(tmp_path, _run_options(**{
+            "extra-volumes": [{"mount-path": "/cvmfs"}],   # missing `volume`
+        }))
 
 
 def test_per_job_manifest_has_explicit_job_id(tmp_path, kubectl_calls):

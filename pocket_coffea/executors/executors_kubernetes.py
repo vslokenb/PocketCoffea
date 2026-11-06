@@ -76,6 +76,16 @@ def _sanitize_k8s_name(name):
     return name[:63].rstrip("-") or "pocket-coffea"
 
 
+def _plain(obj):
+    '''Recursively convert Mapping/list containers (e.g. OmegaConf nodes from a
+    --custom-run-options yaml) to plain dict/list so yaml.safe_dump accepts them.'''
+    if hasattr(obj, "keys"):
+        return {k: _plain(v) for k, v in dict(obj).items()}
+    if isinstance(obj, (list, tuple)):
+        return [_plain(v) for v in obj]
+    return obj
+
+
 def _kubectl_prefix(run_options):
     '''kubectl command prefix honoring the namespace/context run options.'''
     cmd = "kubectl"
@@ -97,9 +107,11 @@ def _pod_resources(run_options):
     device="cuda" -- the columnar coffea processing itself stays on CPU.'''
     cores_per_worker = int(run_options.get("cores-per-worker", 1))
     memory = _normalize_memory(run_options.get("mem-per-worker", "2GiB"), "2Gi")
+    # cpu is limited as well as requested: multi-tenant clusters (e.g. NRP /
+    # Nautilus) require limits on both resources at admission.
     resources = {
         "requests": {"cpu": str(cores_per_worker), "memory": memory},
-        "limits": {"memory": memory},
+        "limits": {"cpu": str(cores_per_worker), "memory": memory},
     }
     gpus = run_options.get("gpus-per-worker", None)
     if gpus:
@@ -357,6 +369,27 @@ class ExecutorFactoryKubernetesJobs(ExecutorFactoryManualABC):
             container["volumeMounts"] = [
                 {"name": "pocket-coffea-data", "mountPath": mount_path}
             ]
+
+        # Additional mounts beyond the data PVC, e.g. CVMFS repositories at
+        # sites that expose them as CSI PVCs (NRP/Nautilus) or as a node
+        # hostPath. Each entry carries a raw kubernetes volume source, so any
+        # volume type works without executor changes.
+        for i, entry in enumerate(self.run_options.get("extra-volumes", None) or []):
+            entry = dict(entry)
+            if "volume" not in entry or "mount-path" not in entry:
+                raise Exception(
+                    "k8sjobs@kubernetes: each extra-volumes entry needs `volume` "
+                    "(a raw kubernetes volume source, e.g. "
+                    "{persistentVolumeClaim: {claimName: ...}} or {hostPath: {path: ...}}) "
+                    "and `mount-path`."
+                )
+            vol_name = _sanitize_k8s_name(str(entry.get("name", f"extra-vol-{i}")))
+            pod_spec.setdefault("volumes", []).append(
+                {"name": vol_name, **_plain(entry["volume"])})
+            mount = {"name": vol_name, "mountPath": str(entry["mount-path"])}
+            if entry.get("read-only", False):
+                mount["readOnly"] = True
+            container.setdefault("volumeMounts", []).append(mount)
 
         backoff_limit = int(self.run_options.get("backoff-limit", 0))
         job_spec = {

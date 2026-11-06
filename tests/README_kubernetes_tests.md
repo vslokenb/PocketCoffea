@@ -24,13 +24,13 @@ python3 -m venv ~/pocotest-venv
 From the repository root (branch `kubernetes-executor-test`):
 
 ```bash
-# kubernetes executor suites (18 tests)
+# kubernetes executor suites (20 tests)
 PYTHONPATH=$PWD ~/pocotest-venv/bin/python -m pytest \
     tests/test_kubernetes_jobs.py tests/test_kubernetes_proxy_staging.py -v
 ```
 
 ```bash
-# full manual-jobs stack the executor builds on (42 tests, ~2 s)
+# full manual-jobs stack the executor builds on (44 tests, ~2 s)
 PYTHONPATH=$PWD ~/pocotest-venv/bin/python -m pytest \
     tests/test_kubernetes_jobs.py tests/test_kubernetes_proxy_staging.py \
     tests/test_manual_jobs_splitting.py tests/test_recreate_jobs_blocklist.py -q

@@ -273,6 +273,14 @@ k8sjobs@kubernetes:
   # Leave both null if your facility auto-mounts the shared filesystem in pods.
   pvc-name: null
   pvc-mount-path: null
+  # Additional mounts beyond the data PVC, e.g. CVMFS repos where they are
+  # exposed as CSI PVCs (NRP/Nautilus) or a node hostPath. Each entry:
+  #   - name: cvmfs-cms-griddata          # optional
+  #     mount-path: /cvmfs/cms-griddata.cern.ch
+  #     read-only: true
+  #     volume: {persistentVolumeClaim: {claimName: cvmfs-cms-griddata}}
+  # (`volume` is a raw kubernetes volume source; hostPath etc. work too.)
+  extra-volumes: null
   service-account: null
   node-selector: null
   # Per-index pod-failure retries (backoffLimitPerIndex, needs k8s >= 1.29);
